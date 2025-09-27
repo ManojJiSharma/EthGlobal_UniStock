@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { ArrowUpDown, Loader2, AlertCircle } from 'lucide-react';
 import { useUnistockDEX } from '@/hooks/useUnistockDEX';
 import { useWallet } from '@/hooks/useWallet';
-import { TOKENS } from '@/config/contracts';
+import { TOKENS } from '@/config/contract';
 
 const SwapWidget = () => {
   const { 

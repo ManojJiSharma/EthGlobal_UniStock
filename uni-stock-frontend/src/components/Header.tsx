@@ -14,6 +14,7 @@ const Header = () => {
   };
 
   const handleConnect = async () => {
+    console.log("🚀 ~ handleConnect ~ isCorrectNetwork:", isCorrectNetwork)
     if (!isCorrectNetwork) {
       await switchNetwork();
     } else {
