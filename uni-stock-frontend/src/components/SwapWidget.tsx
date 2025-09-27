@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { ArrowUpDown, Loader2, AlertCircle } from 'lucide-react';
 import { useUnistockDEX } from '@/hooks/useUnistockDEX';
 import { useWallet } from '@/hooks/useWallet';
-import { TOKENS } from '@/config/contract';
+import { TOKENS } from '@/config/contracts';
 
 const SwapWidget = () => {
   const { 
@@ -22,6 +22,8 @@ const SwapWidget = () => {
     address, 
     isCorrectNetwork, 
     isInitialized, 
+    isConnecting,
+    isSwitchingNetwork,
     connectWallet, 
     switchNetwork 
   } = useWallet();
@@ -115,10 +117,24 @@ const SwapWidget = () => {
     setToAmount(tempAmount);
   };
 
+  // Handle connect wallet
+  const handleConnectWallet = async () => {
+    console.log('Connect wallet clicked in SwapWidget');
+    try {
+      if (!isCorrectNetwork) {
+        await switchNetwork();
+      } else {
+        await connectWallet();
+      }
+    } catch (error) {
+      console.error('Error connecting wallet:', error);
+    }
+  };
+
   // Handle swap
   const handleSwap = async () => {
     if (!isConnected || !address) {
-      connectWallet();
+      handleConnectWallet();
       return;
     }
 
@@ -172,6 +188,8 @@ const SwapWidget = () => {
   const getButtonDisabled = () => {
     if (!isInitialized) return true;
     if (isLoading) return true;
+    if (isConnecting) return true;
+    if (isSwitchingNetwork) return true;
     if (!isConnected) return false;
     if (!isCorrectNetwork) return false;
     if (!fromAmount || parseFloat(fromAmount) <= 0) return true;
@@ -183,6 +201,8 @@ const SwapWidget = () => {
   const getButtonText = () => {
     if (!isInitialized) return 'Initializing...';
     if (isLoading) return 'Swapping...';
+    if (isConnecting) return 'Connecting...';
+    if (isSwitchingNetwork) return 'Switching Network...';
     if (!isConnected) return 'Connect Wallet';
     if (!isCorrectNetwork) return 'Switch Network';
     if (!fromAmount || parseFloat(fromAmount) <= 0) return 'Enter Amount';

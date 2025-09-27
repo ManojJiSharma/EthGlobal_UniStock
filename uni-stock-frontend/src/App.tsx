@@ -6,7 +6,11 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Header from "./components/Header";
 import Index from "./pages/Index";
 import Swap from "./pages/Swap";
-
+import Liquidity from "./pages/Liquidity";
+import Pools from "./pages/Pools";
+import NotFound from "./pages/NotFound";
+import ScrollToTop from "./components/ScrollToTop";
+import ScrollToTopButton from "./components/ScrollToTopButton";
 
 const queryClient = new QueryClient();
 
@@ -19,12 +23,16 @@ const App = () => (
         <div className="global-bg">
           <div className="bg-effect-2"></div>
           <Header />
-          
+          <ScrollToTop />
           <Routes>
             <Route path="/" element={<Index />} />
-             <Route path="/swap" element={<Swap />} />
+            <Route path="/swap" element={<Swap />} />
+            <Route path="/liquidity" element={<Liquidity />} />
+            <Route path="/pools" element={<Pools />} />
+            {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+            <Route path="*" element={<NotFound />} />
           </Routes>
-          
+          <ScrollToTopButton />
         </div>
       </BrowserRouter>
     </TooltipProvider>

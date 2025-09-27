@@ -1,0 +1,411 @@
+import { useState, useEffect } from "react";
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Plus, Minus, Loader2, AlertCircle } from "lucide-react";
+import { useUnistockDEX } from "@/hooks/useUnistockDEX";
+import { useWallet } from "@/hooks/useWallet";
+import { TOKENS, POOL_CONFIG } from "@/config/contracts";
+
+const Liquidity = () => {
+  const { 
+    addLiquidity, 
+    removeLiquidity, 
+    getTokenBalance,
+    isLoading: dexLoading 
+  } = useUnistockDEX();
+  
+  const { isConnected, address, isCorrectNetwork, connectWallet, switchNetwork } = useWallet();
+
+  const [activeTab, setActiveTab] = useState<'add' | 'remove'>('add');
+  const [token0, setToken0] = useState(TOKENS.USDC);
+  const [token1, setToken1] = useState(TOKENS.WETH);
+  const [amount0, setAmount0] = useState('');
+  const [amount1, setAmount1] = useState('');
+  const [tickLower, setTickLower] = useState(-60);
+  const [tickUpper, setTickUpper] = useState(60);
+  const [fee, setFee] = useState(POOL_CONFIG.defaultFee);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [token0Balance, setToken0Balance] = useState('0');
+  const [token1Balance, setToken1Balance] = useState('0');
+
+  // Get token symbol
+  const getTokenSymbol = (address: string) => {
+    const tokenMap: { [key: string]: string } = {
+      [TOKENS.WETH]: 'WETH',
+      [TOKENS.USDC]: 'USDC',
+      [TOKENS.USDT]: 'USDT',
+      [TOKENS.DAI]: 'DAI',
+    };
+    return tokenMap[address] || 'UNKNOWN';
+  };
+
+  // Fetch balances
+  const fetchBalances = async () => {
+    if (!address) return;
+    
+    try {
+      const balance0 = await getTokenBalance(token0, address);
+      const balance1 = await getTokenBalance(token1, address);
+      setToken0Balance(balance0);
+      setToken1Balance(balance1);
+    } catch (error) {
+      console.error('Error fetching balances:', error);
+    }
+  };
+
+  useEffect(() => {
+    fetchBalances();
+  }, [address, token0, token1]);
+
+  // Handle add liquidity
+  const handleAddLiquidity = async () => {
+    if (!isConnected || !address) {
+      connectWallet();
+      return;
+    }
+
+    if (!isCorrectNetwork) {
+      switchNetwork();
+      return;
+    }
+
+    if (!amount0 || !amount1 || parseFloat(amount0) <= 0 || parseFloat(amount1) <= 0) {
+      setError('Please enter valid amounts');
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      console.log('Adding liquidity...');
+      
+      const result = await addLiquidity(
+        token0,
+        token1,
+        amount0,
+        amount1,
+        tickLower,
+        tickUpper,
+        fee
+      );
+
+      if (result.success) {
+        console.log('Liquidity added successfully!');
+        setAmount0('');
+        setAmount1('');
+        await fetchBalances();
+      } else {
+        throw new Error(result.error || 'Failed to add liquidity');
+      }
+    } catch (error) {
+      console.error('Error adding liquidity:', error);
+      setError(error instanceof Error ? error.message : 'Failed to add liquidity');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Handle remove liquidity
+  const handleRemoveLiquidity = async () => {
+    if (!isConnected || !address) {
+      connectWallet();
+      return;
+    }
+
+    if (!isCorrectNetwork) {
+      switchNetwork();
+      return;
+    }
+
+    if (!amount0 || parseFloat(amount0) <= 0) {
+      setError('Please enter valid liquidity amount');
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      console.log('Removing liquidity...');
+      
+      const result = await removeLiquidity(
+        token0,
+        token1,
+        amount0,
+        tickLower,
+        tickUpper,
+        fee
+      );
+
+      if (result.success) {
+        console.log('Liquidity removed successfully!');
+        setAmount0('');
+        setAmount1('');
+        await fetchBalances();
+      } else {
+        throw new Error(result.error || 'Failed to remove liquidity');
+      }
+    } catch (error) {
+      console.error('Error removing liquidity:', error);
+      setError(error instanceof Error ? error.message : 'Failed to remove liquidity');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Get button disabled state
+  const getButtonDisabled = () => {
+    if (isLoading) return true;
+    if (!isConnected) return false;
+    if (!isCorrectNetwork) return false;
+    if (activeTab === 'add') {
+      if (!amount0 || !amount1 || parseFloat(amount0) <= 0 || parseFloat(amount1) <= 0) return true;
+      if (parseFloat(amount0) > parseFloat(token0Balance)) return true;
+      if (parseFloat(amount1) > parseFloat(token1Balance)) return true;
+    } else {
+      if (!amount0 || parseFloat(amount0) <= 0) return true;
+    }
+    return false;
+  };
+
+  // Get button text
+  const getButtonText = () => {
+    if (isLoading) return activeTab === 'add' ? 'Adding...' : 'Removing...';
+    if (!isConnected) return 'Connect Wallet';
+    if (!isCorrectNetwork) return 'Switch Network';
+    if (activeTab === 'add') {
+      if (!amount0 || !amount1 || parseFloat(amount0) <= 0 || parseFloat(amount1) <= 0) return 'Enter Amounts';
+      if (parseFloat(amount0) > parseFloat(token0Balance)) return 'Insufficient Balance';
+      if (parseFloat(amount1) > parseFloat(token1Balance)) return 'Insufficient Balance';
+      return 'Add Liquidity';
+    } else {
+      if (!amount0 || parseFloat(amount0) <= 0) return 'Enter Amount';
+      return 'Remove Liquidity';
+    }
+  };
+
+  return (
+    <div className="container mx-auto px-4 py-8 relative z-10">
+      <div className="space-y-8">
+        {/* Page Header */}
+        <div className="text-center fade-in">
+          <h1 className="text-4xl md:text-5xl font-bold mb-4">
+            Manage Liquidity
+          </h1>
+          <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
+            Add or remove liquidity from Unistock DEX pools
+          </p>
+        </div>
+
+        <div className="max-w-2xl mx-auto">
+          <Card className="p-6 animated-card hover-lift scale-in">
+            <div className="space-y-6">
+              {/* Tab Selection */}
+              <div className="flex space-x-2">
+                <Button
+                  variant={activeTab === 'add' ? 'default' : 'outline'}
+                  onClick={() => setActiveTab('add')}
+                  className="flex-1"
+                >
+                  <Plus className="w-4 h-4 mr-2" />
+                  Add Liquidity
+                </Button>
+                <Button
+                  variant={activeTab === 'remove' ? 'default' : 'outline'}
+                  onClick={() => setActiveTab('remove')}
+                  className="flex-1"
+                >
+                  <Minus className="w-4 h-4 mr-2" />
+                  Remove Liquidity
+                </Button>
+              </div>
+
+              {/* Token Selection */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Token 0</label>
+                  <select
+                    value={token0}
+                    onChange={(e) => setToken0(e.target.value)}
+                    className="w-full px-3 py-2 border rounded-md bg-background"
+                  >
+                    {Object.entries(TOKENS).map(([key, address]) => (
+                      <option key={key} value={address}>
+                        {getTokenSymbol(address)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Token 1</label>
+                  <select
+                    value={token1}
+                    onChange={(e) => setToken1(e.target.value)}
+                    className="w-full px-3 py-2 border rounded-md bg-background"
+                  >
+                    {Object.entries(TOKENS).map(([key, address]) => (
+                      <option key={key} value={address}>
+                        {getTokenSymbol(address)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Amount Inputs */}
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-sm font-medium">
+                      {getTokenSymbol(token0)} Amount
+                    </label>
+                    <div className="text-sm text-muted-foreground">
+                      Balance: {parseFloat(token0Balance).toFixed(4)}
+                    </div>
+                  </div>
+                  <div className="flex space-x-2">
+                    <Input
+                      type="number"
+                      placeholder="0.0"
+                      value={amount0}
+                      onChange={(e) => setAmount0(e.target.value)}
+                      className="flex-1"
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setAmount0(token0Balance)}
+                    >
+                      Max
+                    </Button>
+                  </div>
+                </div>
+
+                {activeTab === 'add' && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-sm font-medium">
+                        {getTokenSymbol(token1)} Amount
+                      </label>
+                      <div className="text-sm text-muted-foreground">
+                        Balance: {parseFloat(token1Balance).toFixed(4)}
+                      </div>
+                    </div>
+                    <div className="flex space-x-2">
+                      <Input
+                        type="number"
+                        placeholder="0.0"
+                        value={amount1}
+                        onChange={(e) => setAmount1(e.target.value)}
+                        className="flex-1"
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setAmount1(token1Balance)}
+                      >
+                        Max
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Pool Configuration */}
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Fee Tier</label>
+                    <select
+                      value={fee}
+                      onChange={(e) => setFee(Number(e.target.value))}
+                      className="w-full px-3 py-2 border rounded-md bg-background"
+                    >
+                      {POOL_CONFIG.feeTiers.map((tier) => (
+                        <option key={tier.fee} value={tier.fee}>
+                          {tier.label} ({tier.fee / 10000}%)
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Tick Spacing</label>
+                    <Input
+                      type="number"
+                      value={POOL_CONFIG.feeTiers.find(tier => tier.fee === fee)?.tickSpacing || 60}
+                      readOnly
+                      className="bg-muted"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Tick Lower</label>
+                    <Input
+                      type="number"
+                      value={tickLower}
+                      onChange={(e) => setTickLower(Number(e.target.value))}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Tick Upper</label>
+                    <Input
+                      type="number"
+                      value={tickUpper}
+                      onChange={(e) => setTickUpper(Number(e.target.value))}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Error Display */}
+              {error && (
+                <div className="flex items-center space-x-2 text-red-500 text-sm">
+                  <AlertCircle className="w-4 h-4" />
+                  <span>{error}</span>
+                </div>
+              )}
+
+              {/* Action Button */}
+              <Button
+                onClick={activeTab === 'add' ? handleAddLiquidity : handleRemoveLiquidity}
+                disabled={getButtonDisabled()}
+                className="w-full btn-gradient hover-lift"
+                size="lg"
+              >
+                {isLoading ? (
+                  <Loader2 className="w-5 h-5 animate-spin mr-2" />
+                ) : null}
+                {getButtonText()}
+              </Button>
+
+              {/* Info */}
+              <div className="text-sm text-muted-foreground space-y-2">
+                <p>
+                  <strong>Note:</strong> {activeTab === 'add' 
+                    ? 'Adding liquidity will create a new position or add to an existing one.'
+                    : 'Removing liquidity will withdraw tokens from your position.'
+                  }
+                </p>
+                <p>
+                  <strong>Pool:</strong> {getTokenSymbol(token0)}/{getTokenSymbol(token1)} 
+                  ({fee / 10000}% fee)
+                </p>
+                <p>
+                  <strong>Range:</strong> Tick {tickLower} to {tickUpper}
+                </p>
+              </div>
+            </div>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default Liquidity;

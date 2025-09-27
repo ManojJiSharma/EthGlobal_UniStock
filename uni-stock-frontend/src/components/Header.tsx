@@ -1,12 +1,22 @@
-import { useState } from 'react';
-import { Link, useLocation } from 'react-router-dom';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { useWallet } from '@/hooks/useWallet';
+import { useState, useEffect } from "react";
+import { Link, useLocation } from "react-router-dom";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { useWallet } from "@/hooks/useWallet";
 
 const Header = () => {
   const location = useLocation();
-  const { isConnected, address, isCorrectNetwork, isInitialized, connectWallet, disconnectWallet, switchNetwork } = useWallet();
+  const {
+    isConnected,
+    address,
+    isCorrectNetwork,
+    isInitialized,
+    isConnecting,
+    isSwitchingNetwork,
+    connectWallet,
+    disconnectWallet,
+    switchNetwork,
+  } = useWallet();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   const formatAddress = (addr: string) => {
@@ -14,11 +24,17 @@ const Header = () => {
   };
 
   const handleConnect = async () => {
-    console.log("🚀 ~ handleConnect ~ isCorrectNetwork:", isCorrectNetwork)
-    if (!isCorrectNetwork) {
-      await switchNetwork();
-    } else {
-      await connectWallet();
+    console.log("Connect button clicked");
+    try {
+      if (!isCorrectNetwork) {
+        console.log("Switching network...");
+        await switchNetwork();
+      } else {
+        console.log("Connecting wallet...");
+        await connectWallet();
+      }
+    } catch (error) {
+      console.error("Error in handleConnect:", error);
     }
   };
 
@@ -31,6 +47,25 @@ const Header = () => {
     return location.pathname === path;
   };
 
+  // Debug logging
+  useEffect(() => {
+    console.log("Header state:", {
+      isInitialized,
+      isConnected,
+      address,
+      isCorrectNetwork,
+      isConnecting,
+      isSwitchingNetwork,
+    });
+  }, [
+    isInitialized,
+    isConnected,
+    address,
+    isCorrectNetwork,
+    isConnecting,
+    isSwitchingNetwork,
+  ]);
+
   return (
     <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container mx-auto px-4">
@@ -41,7 +76,7 @@ const Header = () => {
               <span className="text-white font-bold text-sm">U</span>
             </div>
             <span className="text-xl font-bold bg-gradient-to-r from-blue-500 to-purple-600 bg-clip-text text-transparent">
-              uniStock
+              UniStock
             </span>
           </Link>
 
@@ -50,7 +85,7 @@ const Header = () => {
             <Link
               to="/"
               className={`text-sm font-medium transition-colors hover:text-primary ${
-                isActive('/') ? 'text-primary' : 'text-muted-foreground'
+                isActive("/") ? "text-primary" : "text-muted-foreground"
               }`}
             >
               Home
@@ -58,7 +93,7 @@ const Header = () => {
             <Link
               to="/swap"
               className={`text-sm font-medium transition-colors hover:text-primary ${
-                isActive('/swap') ? 'text-primary' : 'text-muted-foreground'
+                isActive("/swap") ? "text-primary" : "text-muted-foreground"
               }`}
             >
               Swap
@@ -66,7 +101,7 @@ const Header = () => {
             <Link
               to="/pools"
               className={`text-sm font-medium transition-colors hover:text-primary ${
-                isActive('/pools') ? 'text-primary' : 'text-muted-foreground'
+                isActive("/pools") ? "text-primary" : "text-muted-foreground"
               }`}
             >
               Pools
@@ -74,7 +109,9 @@ const Header = () => {
             <Link
               to="/liquidity"
               className={`text-sm font-medium transition-colors hover:text-primary ${
-                isActive('/liquidity') ? 'text-primary' : 'text-muted-foreground'
+                isActive("/liquidity")
+                  ? "text-primary"
+                  : "text-muted-foreground"
               }`}
             >
               Liquidity
@@ -86,7 +123,9 @@ const Header = () => {
             {!isInitialized ? (
               <div className="flex items-center space-x-2">
                 <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
-                <span className="text-sm text-muted-foreground">Connecting...</span>
+                <span className="text-sm text-muted-foreground">
+                  Initializing...
+                </span>
               </div>
             ) : isConnected ? (
               <div className="flex items-center space-x-2">
@@ -106,7 +145,7 @@ const Header = () => {
                       {formatAddress(address!)}
                     </span>
                   </Button>
-                  
+
                   {isMenuOpen && (
                     <div className="absolute right-0 mt-2 w-48 bg-background border rounded-md shadow-lg z-50">
                       <div className="p-2">
@@ -118,9 +157,17 @@ const Header = () => {
                             variant="ghost"
                             size="sm"
                             onClick={switchNetwork}
+                            disabled={isSwitchingNetwork}
                             className="w-full justify-start mt-2"
                           >
-                            Switch to Sepolia
+                            {isSwitchingNetwork ? (
+                              <>
+                                <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin mr-2"></div>
+                                Switching...
+                              </>
+                            ) : (
+                              "Switch to Sepolia"
+                            )}
                           </Button>
                         )}
                         <Button
@@ -137,8 +184,24 @@ const Header = () => {
                 </div>
               </div>
             ) : (
-              <Button onClick={handleConnect} className="btn-gradient hover-lift">
-                Connect Wallet
+              <Button
+                onClick={handleConnect}
+                disabled={isConnecting || isSwitchingNetwork}
+                className="btn-gradient hover-lift"
+              >
+                {isConnecting ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></div>
+                    Connecting...
+                  </>
+                ) : isSwitchingNetwork ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></div>
+                    Switching...
+                  </>
+                ) : (
+                  "Connect Wallet"
+                )}
               </Button>
             )}
           </div>
@@ -150,8 +213,18 @@ const Header = () => {
             className="md:hidden"
             onClick={() => setIsMenuOpen(!isMenuOpen)}
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+            <svg
+              className="w-5 h-5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M4 6h16M4 12h16M4 18h16"
+              />
             </svg>
           </Button>
         </div>
@@ -163,7 +236,7 @@ const Header = () => {
               <Link
                 to="/"
                 className={`px-4 py-2 text-sm font-medium transition-colors ${
-                  isActive('/') ? 'text-primary' : 'text-muted-foreground'
+                  isActive("/") ? "text-primary" : "text-muted-foreground"
                 }`}
                 onClick={() => setIsMenuOpen(false)}
               >
@@ -172,7 +245,7 @@ const Header = () => {
               <Link
                 to="/swap"
                 className={`px-4 py-2 text-sm font-medium transition-colors ${
-                  isActive('/swap') ? 'text-primary' : 'text-muted-foreground'
+                  isActive("/swap") ? "text-primary" : "text-muted-foreground"
                 }`}
                 onClick={() => setIsMenuOpen(false)}
               >
@@ -181,7 +254,7 @@ const Header = () => {
               <Link
                 to="/pools"
                 className={`px-4 py-2 text-sm font-medium transition-colors ${
-                  isActive('/pools') ? 'text-primary' : 'text-muted-foreground'
+                  isActive("/pools") ? "text-primary" : "text-muted-foreground"
                 }`}
                 onClick={() => setIsMenuOpen(false)}
               >
@@ -190,7 +263,9 @@ const Header = () => {
               <Link
                 to="/liquidity"
                 className={`px-4 py-2 text-sm font-medium transition-colors ${
-                  isActive('/liquidity') ? 'text-primary' : 'text-muted-foreground'
+                  isActive("/liquidity")
+                    ? "text-primary"
+                    : "text-muted-foreground"
                 }`}
                 onClick={() => setIsMenuOpen(false)}
               >

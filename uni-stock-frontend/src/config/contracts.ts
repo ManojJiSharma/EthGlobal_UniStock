@@ -1,8 +1,8 @@
 // Unistock DEX Contracts
 export const CONTRACTS = {
   // Core Unistock DEX Contracts
-  POOL_MANAGER: "0xE03A1074c86CFeDd5C142C4F04F1a1536e203543", // UnistockPoolManager address - UPDATE AFTER DEPLOYMENT
-  ROUTER: "0x3A9D48AB9751398BbFa63ad67599Bb04e4BdF98b ", // UnistockRouter address - UPDATE AFTER DEPLOYMENT
+  POOL_MANAGER: "0x...", // UnistockPoolManager address - UPDATE AFTER DEPLOYMENT
+  ROUTER: "0x...", // UnistockRouter address - UPDATE AFTER DEPLOYMENT
 } as const;
 
 // Network Configuration

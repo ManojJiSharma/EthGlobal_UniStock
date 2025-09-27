@@ -6,7 +6,7 @@ import { TrendingUp, TrendingDown, Loader2, BarChart3 } from "lucide-react";
 import { useUnistockDEX } from "@/hooks/useUnistockDEX";
 import { useWallet } from "@/hooks/useWallet";
 import SwapWidget from "@/components/SwapWidget";
-import { TOKENS } from "@/config/contract";
+import { TOKENS } from "@/config/contracts";
 
 const Swap = () => {
   const { pools, isLoading, error, fetchPools } = useUnistockDEX();

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { ethers } from 'ethers';
-import { CONTRACTS, TOKENS, POOL_CONFIG } from '@/config/contract';
+import { CONTRACTS, TOKENS, POOL_CONFIG } from '@/config/contracts';
 import { 
   POOL_MANAGER_ABI, 
   ROUTER_ABI,
