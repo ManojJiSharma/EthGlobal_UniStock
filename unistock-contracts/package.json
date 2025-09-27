@@ -1,0 +1,36 @@
+{
+  "name": "@unistock/contracts",
+  "version": "1.0.0",
+  "description": "🦄 Unistock DEX - A Uniswap V4 Fork with Custom Features",
+  "main": "index.js",
+  "scripts": {
+    "build": "forge build",
+    "test": "forge test",
+    "coverage": "forge coverage",
+    "deploy:sepolia": "forge script script/DeployUnistock.s.sol:DeployUnistock --rpc-url sepolia --broadcast --verify",
+    "deploy:rootstock": "forge script script/DeployUnistock.s.sol:DeployUnistock --rpc-url rootstock_testnet --broadcast --verify"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/unistock/unistock-contracts.git"
+  },
+  "keywords": [
+    "unistock",
+    "dex",
+    "uniswap",
+    "v4",
+    "defi",
+    "ethereum",
+    "rootstock"
+  ],
+  "author": "Unistock Team",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/unistock/unistock-contracts/issues"
+  },
+  "homepage": "https://github.com/unistock/unistock-contracts#readme",
+  "devDependencies": {
+    "forge-std": "^1.7.0"
+  }
+}
+
