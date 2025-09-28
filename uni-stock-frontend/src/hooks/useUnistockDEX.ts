@@ -63,9 +63,9 @@ export const useUnistockDEX = () => {
       newProvider.getSigner().then((newSigner) => {
         setSigner(newSigner);
         
-        // Initialize contracts
+        // Initialize contracts - both need signer for transactions
         const routerContract = new ethers.Contract(CONTRACTS.ROUTER, ROUTER_ABI, newSigner);
-        const poolManagerContract = new ethers.Contract(CONTRACTS.POOL_MANAGER, POOL_MANAGER_ABI, newProvider);
+        const poolManagerContract = new ethers.Contract(CONTRACTS.POOL_MANAGER, POOL_MANAGER_ABI, newSigner);
         
         setRouter(routerContract);
         setPoolManager(poolManagerContract);
@@ -89,6 +89,10 @@ export const useUnistockDEX = () => {
       return 'Liquidity position not found';
     } else if (error.message.includes('Unistock: Max amount exceeded')) {
       return 'Maximum amount exceeded';
+    } else if (error.message.includes('0x486aa307')) {
+      return 'Pool does not exist or is not initialized';
+    } else if (error.message.includes('0xe450d38c')) {
+      return 'Router not authorized or pool not registered';
     } else {
       return error.message || 'Unknown error occurred';
     }
@@ -124,6 +128,135 @@ export const useUnistockDEX = () => {
       )
     );
   }, []);
+
+  // Create PoolKey struct
+  const createPoolKey = useCallback((token0: string, token1: string, fee: number, tickSpacing: number) => {
+    const [tokenA, tokenB] = token0 < token1 ? [token0, token1] : [token1, token0];
+    return {
+      currency0: tokenA,
+      currency1: tokenB,
+      fee: fee,
+      tickSpacing: tickSpacing,
+      hooks: ethers.ZeroAddress
+    };
+  }, []);
+
+  // Check and configure contracts
+  const ensureContractsConfigured = useCallback(async (): Promise<boolean> => {
+    try {
+      if (!poolManager || !router) {
+        throw new Error('PoolManager or Router not available');
+      }
+
+      console.log('Checking contract configuration...');
+
+      // Check if router is authorized in pool manager
+      const isAuthorized = await (poolManager as any).authorizedCallers(CONTRACTS.ROUTER);
+      console.log('Router authorization status:', isAuthorized);
+      
+      if (!isAuthorized) {
+        console.log('Router not authorized, attempting to authorize...');
+        try {
+          const authTx = await (poolManager as any).setAuthorizedCaller(CONTRACTS.ROUTER, true);
+          await authTx.wait();
+          console.log('Router authorized successfully');
+        } catch (authError) {
+          console.log('Failed to authorize router (may not be admin):', authError);
+          // Continue anyway
+        }
+      }
+
+      // Check router admin
+      try {
+        const routerAdmin = await (router as any).admin();
+        console.log('Router admin:', routerAdmin);
+      } catch (err) {
+        console.log('Could not get router admin:', err);
+      }
+
+      // Check pool manager admin
+      try {
+        const poolManagerAdmin = await (poolManager as any).admin();
+        console.log('Pool manager admin:', poolManagerAdmin);
+      } catch (err) {
+        console.log('Could not get pool manager admin:', err);
+      }
+
+      return true;
+    } catch (error) {
+      console.log('Contract configuration check failed:', error);
+      return false;
+    }
+  }, [poolManager, router]);
+
+  // Initialize pool if it doesn't exist
+  const initializePool = useCallback(async (
+    token0: string,
+    token1: string,
+    fee: number,
+    tickSpacing: number
+  ): Promise<boolean> => {
+    try {
+      if (!poolManager || !router) {
+        throw new Error('PoolManager or Router not available');
+      }
+
+      // Ensure contracts are configured
+      await ensureContractsConfigured();
+
+      const poolId = getPoolId(token0, token1, fee, tickSpacing);
+      let poolInitialized = false;
+      
+      // Check if pool already exists and is properly initialized
+      try {
+        const poolInfo = await (poolManager as any).getPoolKey(poolId);
+        console.log('Pool info:', poolInfo);
+        
+        // Check if pool is properly initialized (not all zeros)
+        const isInitialized = poolInfo[0] !== ethers.ZeroAddress || poolInfo[1] !== ethers.ZeroAddress;
+        
+        if (isInitialized) {
+          console.log('Pool already exists and is initialized');
+          poolInitialized = true;
+        } else {
+          console.log('Pool exists but is not initialized, initializing...');
+        }
+      } catch (err) {
+        console.log('Pool does not exist, initializing...');
+      }
+
+      // Create PoolKey struct
+      const poolKey = createPoolKey(token0, token1, fee, tickSpacing);
+      
+      // Initialize the pool if not already initialized
+      if (!poolInitialized) {
+        // Initialize the pool with 1:1 price (sqrtPriceX96 = 79228162514264337593543950336)
+        const sqrtPriceX96 = 79228162514264337593543950336n; // 1:1 price
+        
+        const tx = await (poolManager as any).initializePool(poolKey, sqrtPriceX96);
+
+        console.log('Pool initialization transaction:', tx.hash);
+        const receipt = await tx.wait();
+        console.log('Pool initialized successfully');
+      }
+      
+      // Always try to register the pool with the router (even if already registered)
+      try {
+        console.log('Registering pool with router...');
+        const registerTx = await (router as any).registerPool(poolKey);
+        await registerTx.wait();
+        console.log('Pool registered with router successfully');
+      } catch (registerError) {
+        console.log('Pool registration failed (may already be registered):', registerError);
+        // Continue anyway as the pool is initialized
+      }
+      
+      return true;
+    } catch (error) {
+      console.error('Failed to initialize pool:', error);
+      return false;
+    }
+  }, [poolManager, router, getPoolId, createPoolKey, ensureContractsConfigured]);
 
   // Fetch pool data from contracts
   const fetchPools = useCallback(async () => {
@@ -235,7 +368,7 @@ export const useUnistockDEX = () => {
       }
 
       const amountInWei = ethers.parseEther(amountIn);
-      const amountOutWei = await router.getAmountOut(tokenIn, tokenOut, amountInWei, fee, tickSpacing);
+      const amountOutWei = await (router as any).getAmountOut(tokenIn, tokenOut, amountInWei, fee, tickSpacing);
       return ethers.formatEther(amountOutWei);
     } catch (error) {
       console.error('Quote failed:', error);
@@ -257,7 +390,7 @@ export const useUnistockDEX = () => {
       }
 
       const amountOutWei = ethers.parseEther(amountOut);
-      const amountInWei = await router.getAmountIn(tokenIn, tokenOut, amountOutWei, fee, tickSpacing);
+      const amountInWei = await (router as any).getAmountIn(tokenIn, tokenOut, amountOutWei, fee, tickSpacing);
       return ethers.formatEther(amountInWei);
     } catch (error) {
       console.error('Quote failed:', error);
@@ -284,7 +417,7 @@ export const useUnistockDEX = () => {
       
       // Only approve if needed
       if (currentAllowance < amountWei) {
-        const gasEstimate = await token.estimateGas.approve(spender, amountWei);
+        const gasEstimate = await (token as any).estimateGas.approve(spender, amountWei);
         const tx = await token.approve(spender, amountWei, {
           gasLimit: gasEstimate * 120n / 100n // 20% buffer
         });
@@ -327,7 +460,7 @@ export const useUnistockDEX = () => {
       const minAmountOutWei = ethers.parseEther(minAmountOut);
 
       // Estimate gas first
-      const gasEstimate = await router.estimateGas.swapExactInputSingle(
+      const gasEstimate = await (router as any).estimateGas.swapExactInputSingle(
         tokenIn,
         tokenOut,
         amountInWei,
@@ -337,7 +470,7 @@ export const useUnistockDEX = () => {
       );
 
       // Execute swap
-      const tx = await router.swapExactInputSingle(
+      const tx = await (router as any).swapExactInputSingle(
         tokenIn,
         tokenOut,
         amountInWei,
@@ -382,7 +515,7 @@ export const useUnistockDEX = () => {
       const amountOutWei = ethers.parseEther(amountOut);
       const maxAmountInWei = ethers.parseEther(maxAmountIn);
 
-      const gasEstimate = await router.estimateGas.swapExactOutputSingle(
+      const gasEstimate = await (router as any).estimateGas.swapExactOutputSingle(
         tokenIn,
         tokenOut,
         amountOutWei,
@@ -391,7 +524,7 @@ export const useUnistockDEX = () => {
         tickSpacing
       );
 
-      const tx = await router.swapExactOutputSingle(
+      const tx = await (router as any).swapExactOutputSingle(
         tokenIn,
         tokenOut,
         amountOutWei,
@@ -457,7 +590,7 @@ export const useUnistockDEX = () => {
     }
   }, [getAmountOut, swapExactInputSingle, handleContractError]);
 
-  // Add liquidity
+  // Add liquidity - approve both router and pool manager
   const addLiquidity = useCallback(async (
     token0: string,
     token1: string,
@@ -469,25 +602,97 @@ export const useUnistockDEX = () => {
     tickSpacing: number = POOL_CONFIG.defaultTickSpacing
   ): Promise<LiquidityResult> => {
     try {
-      if (!router) {
-        throw new Error('Router not available');
+      if (!router || !signer) {
+        throw new Error('Router or Signer not available');
       }
+
+      console.log('Starting addLiquidity process...');
+      console.log('Router address:', CONTRACTS.ROUTER);
+      console.log('Pool manager address:', CONTRACTS.POOL_MANAGER);
 
       const amount0Wei = ethers.parseEther(amount0);
       const amount1Wei = ethers.parseEther(amount1);
 
-      const gasEstimate = await router.estimateGas.addLiquidity(
-        token0,
-        token1,
-        amount0Wei,
-        amount1Wei,
-        tickLower,
-        tickUpper,
-        fee,
-        tickSpacing
-      );
+      // Initialize pool first if it doesn't exist
+      const poolInitialized = await initializePool(token0, token1, fee, tickSpacing);
+      console.log("🚀 ~ useUnistockDEX ~ poolInitialized:", poolInitialized)
+      if (!poolInitialized) {
+        throw new Error('Failed to initialize pool');
+      }
 
-      const tx = await router.addLiquidity(
+      // Check if user is authorized to call the router
+      const userAddress = await signer.getAddress();
+      console.log('User address:', userAddress);
+      
+      // Check if user is authorized in router
+      const isUserAuthorized = await (router as any).authorizedCallers(userAddress);
+      console.log('User authorization status:', isUserAuthorized);
+      
+      if (!isUserAuthorized) {
+        console.log('User not authorized, attempting to authorize...');
+        try {
+          const authTx = await (router as any).setAuthorizedCaller(userAddress, true);
+          await authTx.wait();
+          console.log('User authorized successfully');
+        } catch (authError) {
+          console.log('Failed to authorize user (may not be admin):', authError);
+          // Continue anyway - user might be admin
+        }
+      }
+
+      // Approve tokens for BOTH router and pool manager
+      const token0Contract = new ethers.Contract(token0, ERC20_ABI, signer);
+      const token1Contract = new ethers.Contract(token1, ERC20_ABI, signer);
+      
+      // Check and approve token0 for router
+      const allowance0Router = await token0Contract.allowance(userAddress, CONTRACTS.ROUTER);
+      console.log("🚀 ~ useUnistockDEX ~ allowance0Router:", allowance0Router)
+      if (allowance0Router < amount0Wei) {
+        console.log('Approving token0 for router...');
+        const approveTx0 = await token0Contract.approve(CONTRACTS.ROUTER, amount0Wei);
+        await approveTx0.wait();
+      }
+      
+      // Check and approve token0 for pool manager
+      const allowance0PoolManager = await token0Contract.allowance(userAddress, CONTRACTS.POOL_MANAGER);
+      console.log("🚀 ~ useUnistockDEX ~ allowance0PoolManager:", allowance0PoolManager)
+      if (allowance0PoolManager < amount0Wei) {
+        console.log('Approving token0 for pool manager...');
+        const approveTx0PM = await token0Contract.approve(CONTRACTS.POOL_MANAGER, amount0Wei);
+        await approveTx0PM.wait();
+      }
+      
+      // Check and approve token1 for router
+      const allowance1Router = await token1Contract.allowance(userAddress, CONTRACTS.ROUTER);
+      console.log("🚀 ~ useUnistockDEX ~ allowance1Router:", allowance1Router)
+      if (allowance1Router < amount1Wei) {
+        console.log('Approving token1 for router...');
+        const approveTx1 = await token1Contract.approve(CONTRACTS.ROUTER, amount1Wei);
+        await approveTx1.wait();
+      }
+      
+      // Check and approve token1 for pool manager
+      const allowance1PoolManager = await token1Contract.allowance(userAddress, CONTRACTS.POOL_MANAGER);
+      console.log("🚀 ~ useUnistockDEX ~ allowance1PoolManager:", allowance1PoolManager)
+      if (allowance1PoolManager < amount1Wei) {
+        console.log('Approving token1 for pool manager...');
+        const approveTx1PM = await token1Contract.approve(CONTRACTS.POOL_MANAGER, amount1Wei);
+        await approveTx1PM.wait();
+      }
+
+      // Try to call addLiquidity with manual gas limit
+      console.log('Attempting to add liquidity with manual gas limit...');
+      console.log('Router contract:', router);
+      console.log('Router address:', await router.getAddress());
+      
+      // Check if the function exists
+      console.log('Router interface:', router.interface);
+      console.log('Available functions:', router.interface.fragments.map(f => f.name));
+      
+      // Try calling addLiquidity with a fixed gas limit to bypass estimation
+      console.log('Calling addLiquidity with fixed gas limit...');
+      
+      const tx = await (router as any).addLiquidity(
         token0,
         token1,
         amount0Wei,
@@ -497,16 +702,18 @@ export const useUnistockDEX = () => {
         fee,
         tickSpacing,
         {
-          gasLimit: gasEstimate * 120n / 100n
+          gasLimit: 500000n // Fixed gas limit to bypass estimation
         }
       );
+
+      console.log('Transaction sent:', tx.hash);
 
       const receipt = await tx.wait();
       
       // Parse liquidity amount from events
       const liquidityEvent = receipt.logs.find(log => {
         try {
-          const parsed = router.interface.parseLog(log);
+          const parsed = (router as any).interface.parseLog(log);
           return parsed?.name === 'LiquidityAdded';
         } catch {
           return false;
@@ -515,13 +722,13 @@ export const useUnistockDEX = () => {
 
       let liquidity = '0';
       if (liquidityEvent) {
-        const parsed = router.interface.parseLog(liquidityEvent);
+        const parsed = (router as any).interface.parseLog(liquidityEvent);
         liquidity = parsed?.args.amount0?.toString() || '0';
       }
 
       // Get updated position
       const poolId = getPoolId(token0, token1, fee, tickSpacing);
-      const position = await getUserPosition(await signer!.getAddress(), poolId);
+      const position = await getUserPosition(userAddress, poolId);
 
       return {
         success: true,
@@ -531,12 +738,13 @@ export const useUnistockDEX = () => {
         position: position
       };
     } catch (error) {
+      console.error('Add liquidity error:', error);
       return {
         success: false,
         error: handleContractError(error)
       };
     }
-  }, [router, signer, getPoolId, handleContractError]);
+  }, [router, signer, getPoolId, handleContractError, poolManager, initializePool]);
 
   // Remove liquidity
   const removeLiquidity = useCallback(async (
@@ -553,20 +761,22 @@ export const useUnistockDEX = () => {
         throw new Error('Router not available');
       }
 
-      const gasEstimate = await router.estimateGas.removeLiquidity(
+      const liquidityAmountWei = ethers.parseUnits(liquidityAmount, 0); // liquidity is uint128
+
+      const gasEstimate = await (router as any).estimateGas.removeLiquidity(
         token0,
         token1,
-        liquidityAmount,
+        liquidityAmountWei,
         tickLower,
         tickUpper,
         fee,
         tickSpacing
       );
 
-      const tx = await router.removeLiquidity(
+      const tx = await (router as any).removeLiquidity(
         token0,
         token1,
-        liquidityAmount,
+        liquidityAmountWei,
         tickLower,
         tickUpper,
         fee,
@@ -601,7 +811,7 @@ export const useUnistockDEX = () => {
         throw new Error('Router not available');
       }
 
-      const position = await router.getUserPosition(userAddress, poolId);
+      const position = await (router as any).getUserPosition(userAddress, poolId);
       
       return {
         tickLower: Number(position.tickLower),
@@ -623,7 +833,7 @@ export const useUnistockDEX = () => {
         throw new Error('Router not available');
       }
 
-      const stats = await router.getUserStats(userAddress);
+      const stats = await (router as any).getUserStats(userAddress);
       
       return {
         swapCount: stats.swapCount.toString(),
@@ -646,9 +856,9 @@ export const useUnistockDEX = () => {
         throw new Error('Router not available');
       }
 
-      const gasEstimate = await router.estimateGas.setReferrer(userAddress, referrerAddress);
+      const gasEstimate = await (router as any).estimateGas.setReferrer(userAddress, referrerAddress);
       
-      const tx = await router.setReferrer(userAddress, referrerAddress, {
+      const tx = await (router as any).setReferrer(userAddress, referrerAddress, {
         gasLimit: gasEstimate * 120n / 100n
       });
 
@@ -674,9 +884,9 @@ export const useUnistockDEX = () => {
         throw new Error('Router not available');
       }
 
-      const gasEstimate = await router.estimateGas.claimReferralRewards();
+      const gasEstimate = await (router as any).estimateGas.claimReferralRewards();
       
-      const tx = await router.claimReferralRewards({
+      const tx = await (router as any).claimReferralRewards({
         gasLimit: gasEstimate * 120n / 100n
       });
 
@@ -749,6 +959,7 @@ export const useUnistockDEX = () => {
     setReferrer,
     claimReferralRewards,
     getTokenBalance,
+    initializePool,
     
     // Utilities
     getPoolId,

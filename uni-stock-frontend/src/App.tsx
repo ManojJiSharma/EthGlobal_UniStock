@@ -11,6 +11,8 @@ import Pools from "./pages/Pools";
 import NotFound from "./pages/NotFound";
 import ScrollToTop from "./components/ScrollToTop";
 import ScrollToTopButton from "./components/ScrollToTopButton";
+import LendingPlatform from "./pages/lendingPlatform";
+
 
 const queryClient = new QueryClient();
 
@@ -29,6 +31,7 @@ const App = () => (
             <Route path="/swap" element={<Swap />} />
             <Route path="/liquidity" element={<Liquidity />} />
             <Route path="/pools" element={<Pools />} />
+            <Route path="/lending-borrowing" element={<LendingPlatform />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>

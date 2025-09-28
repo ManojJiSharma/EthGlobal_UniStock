@@ -100,9 +100,9 @@ contract UnistockPoolManager is PoolManager {
         emit CustomFeeSet(token, oldFee, fee);
     }
 
-    /// @notice Set default protocol fee
+    /// @notice Set protocol fee
     /// @param fee New protocol fee (in basis points)
-    function setDefaultProtocolFee(uint24 fee) external onlyAdmin {
+    function setProtocolFee(uint24 fee) external onlyAdmin {
         require(fee <= maxProtocolFee, "Unistock: Fee too high");
         uint24 oldFee = defaultProtocolFee;
         defaultProtocolFee = fee;
@@ -117,85 +117,117 @@ contract UnistockPoolManager is PoolManager {
     }
 
     /// @notice Set authorized caller
-    /// @param caller Address to authorize/unauthorize
+    /// @param caller Caller address
     /// @param authorized Whether the caller is authorized
     function setAuthorizedCaller(address caller, bool authorized) external onlyAdmin {
         authorizedCallers[caller] = authorized;
     }
 
-    /// @notice Initialize pool with Unistock-specific logic
-    /// @param key Pool key containing token addresses, fee, tick spacing, and hooks
+    /// @notice Get token fee (custom or default)
+    /// @param token Token address
+    /// @return fee Fee for the token
+    function getTokenFee(address token) public view returns (uint24 fee) {
+        return customFees[token] > 0 ? customFees[token] : defaultProtocolFee;
+    }
+
+    /// @notice Initialize a new pool
+    /// @param key Pool key
     /// @param sqrtPriceX96 Initial sqrt price
     /// @return tick Initial tick
-    function initializePool(PoolKey memory key, uint160 sqrtPriceX96) external noDelegateCall returns (int24 tick) {
-        // Validate token ordering (currency0 must be < currency1)
-        require(key.currency0 < key.currency1, "CurrenciesOutOfOrderOrEqual");
+    function initializePool(PoolKey memory key, uint160 sqrtPriceX96) external onlyAuthorized returns (int24 tick) {
+        // Check if tokens are whitelisted
+        require(whitelistedTokens[Currency.unwrap(key.currency0)], "Unistock: Token0 not whitelisted");
+        require(whitelistedTokens[Currency.unwrap(key.currency1)], "Unistock: Token1 not whitelisted");
 
-        // Validate tick spacing
-        require(key.tickSpacing >= TickMath.MIN_TICK_SPACING, "TickSpacingTooSmall");
-        require(key.tickSpacing <= TickMath.MAX_TICK_SPACING, "TickSpacingTooLarge");
+        // Initialize the pool
+        tick = super.initialize(key, sqrtPriceX96);
 
-        // Validate hook address if hooks are used
-        if (address(key.hooks) != address(0)) {
-            require(Hooks.isValidHookAddress(key.hooks, key.fee), "HookAddressNotValid");
-        }
-
-        // Check if tokens are whitelisted (if whitelisting is enabled)
-        address token0 = Currency.unwrap(key.currency0);
-        address token1 = Currency.unwrap(key.currency1);
-
-        // Only check whitelist if at least one token is whitelisted (allows some flexibility)
-        if (whitelistedTokens[token0] || whitelistedTokens[token1]) {
-            require(whitelistedTokens[token0], "Unistock: Token0 not whitelisted");
-            require(whitelistedTokens[token1], "Unistock: Token1 not whitelisted");
-        }
-
-        // Call parent initialize function directly
-        tick = this.initialize(key, sqrtPriceX96);
-
-        // Mark pool as active and store pool key
+        // Mark pool as active
         PoolId poolId = key.toId();
         activePools[poolId] = true;
         poolKeys[poolId] = key;
 
         // Emit custom event
-        emit UnistockPoolCreated(poolId, token0, token1, key.fee, key.tickSpacing);
+        emit UnistockPoolCreated(
+            poolId,
+            Currency.unwrap(key.currency0),
+            Currency.unwrap(key.currency1),
+            key.fee,
+            key.tickSpacing
+        );
     }
 
-    /// @notice Execute swap with enhanced tracking and analytics
+    /// @notice Check if pool is active
+    /// @param poolId Pool ID
+    /// @return active Whether the pool is active
+    function isPoolActive(PoolId poolId) external view returns (bool active) {
+        return activePools[poolId];
+    }
+
+    /// @notice Get pool key
+    /// @param poolId Pool ID
+    /// @return key Pool key
+    function getPoolKey(PoolId poolId) external view returns (PoolKey memory key) {
+        return poolKeys[poolId];
+    }
+
+    /// @notice Get pool statistics
+    /// @param poolId Pool ID
+    /// @return volume Pool volume
+    /// @return swapCount Number of swaps
+    /// @return liquidityVolume Liquidity volume
+    /// @return currentLiquidity Current liquidity
+    /// @return feesCollected Fees collected
+    function getPoolStats(PoolId poolId) external view returns (uint256 volume, uint256 swapCount, uint256 liquidityVolume, uint128 currentLiquidity, uint256 feesCollected) {
+        volume = poolVolume[poolId];
+        swapCount = poolSwapCount[poolId];
+        liquidityVolume = poolLiquidityVolume[poolId];
+        currentLiquidity = totalLiquidity[poolId];
+        feesCollected = protocolFeesCollected[poolId];
+    }
+
+    /// @notice Calculate pool TVL
+    /// @param poolId Pool ID
+    /// @return tvl0 TVL for token0
+    /// @return tvl1 TVL for token1
+    function calculatePoolTVL(PoolId poolId) external view returns (uint256 tvl0, uint256 tvl1) {
+        // This is a simplified calculation
+        // In practice, you'd calculate based on current liquidity and price
+        tvl0 = poolVolume[poolId] / 2;
+        tvl1 = poolVolume[poolId] / 2;
+    }
+
+    /// @notice Execute swap
     /// @param key Pool key
     /// @param params Swap parameters
     /// @param hookData Hook data
-    /// @return swapDelta Swap result delta
+    /// @return callerDelta Caller balance delta
     function executeSwap(PoolKey memory key, IPoolManager.SwapParams memory params, bytes calldata hookData)
         external
         onlyAuthorized
         onlyActivePool(key.toId())
-        returns (BalanceDelta swapDelta)
+        returns (BalanceDelta callerDelta)
     {
-        // Execute the swap
-        swapDelta = this.swap(key, params, hookData);
+        // Execute swap
+        callerDelta = this.swap(key, params, hookData);
 
         // Update pool statistics
         PoolId poolId = key.toId();
+        poolVolume[poolId] += abs(callerDelta.amount0()) + abs(callerDelta.amount1());
         poolSwapCount[poolId]++;
 
-        // Calculate volume (simplified)
-        uint256 volume = uint256(abs(params.amountSpecified));
-        poolVolume[poolId] += volume;
-
         // Emit custom event
-        address tokenIn = params.zeroForOne ? Currency.unwrap(key.currency0) : Currency.unwrap(key.currency1);
-        address tokenOut = params.zeroForOne ? Currency.unwrap(key.currency1) : Currency.unwrap(key.currency0);
-
         emit SwapExecuted(
-            poolId, msg.sender, tokenIn, tokenOut, volume, uint256(abs(swapDelta.amount0() + swapDelta.amount1()))
+            poolId,
+            msg.sender,
+            Currency.unwrap(key.currency0),
+            Currency.unwrap(key.currency1),
+            abs(callerDelta.amount0()),
+            abs(callerDelta.amount1())
         );
-
-        return swapDelta;
     }
 
-    /// @notice Execute liquidity modification with enhanced tracking
+    /// @notice Execute modify liquidity
     /// @param key Pool key
     /// @param params Modify liquidity parameters
     /// @param hookData Hook data
@@ -218,133 +250,109 @@ contract UnistockPoolManager is PoolManager {
             poolLiquidityVolume[poolId] += uint256(params.liquidityDelta);
         } else {
             totalLiquidity[poolId] -= uint128(uint256(-params.liquidityDelta));
-            poolLiquidityVolume[poolId] += uint256(-params.liquidityDelta);
         }
 
         // Emit custom event
-        emit LiquidityModified(poolId, msg.sender, params.tickLower, params.tickUpper, params.liquidityDelta);
-
-        return (callerDelta, feesAccrued);
-    }
-
-    /// @notice Collect protocol fees from a pool
-    /// @param poolId Pool ID
-    /// @param amount0 Amount of token0 fees to collect
-    /// @param amount1 Amount of token1 fees to collect
-    function collectProtocolFees(PoolId poolId, uint256 amount0, uint256 amount1)
-        external
-        onlyAdmin
-        onlyActivePool(poolId)
-    {
-        // Update fee tracking
-        protocolFeesCollected[poolId] += amount0 + amount1;
-
-        // Transfer fees to fee recipient
-        PoolKey memory key = poolKeys[poolId];
-        if (amount0 > 0) {
-            tokenFeesCollected[Currency.unwrap(key.currency0)] += amount0;
-        }
-        if (amount1 > 0) {
-            tokenFeesCollected[Currency.unwrap(key.currency1)] += amount1;
-        }
-    }
-
-    /// @notice Check if a pool is active
-    /// @param poolId Pool ID to check
-    /// @return isActive Whether the pool is active
-    function isPoolActive(PoolId poolId) external view returns (bool isActive) {
-        return activePools[poolId];
-    }
-
-    /// @notice Get custom fee for a token, returns default if not set
-    /// @param token Token address
-    /// @return fee Custom fee or default fee
-    function getTokenFee(address token) external view returns (uint24 fee) {
-        return customFees[token] > 0 ? customFees[token] : defaultProtocolFee;
-    }
-
-    /// @notice Get comprehensive pool statistics
-    /// @param poolId Pool ID
-    /// @return volume Total volume traded
-    /// @return swapCount Total number of swaps
-    /// @return liquidityVolume Total liquidity volume
-    /// @return currentLiquidity Current total liquidity
-    /// @return feesCollected Total protocol fees collected
-    function getPoolStats(PoolId poolId)
-        external
-        view
-        returns (
-            uint256 volume,
-            uint256 swapCount,
-            uint256 liquidityVolume,
-            uint128 currentLiquidity,
-            uint256 feesCollected
-        )
-    {
-        return (
-            poolVolume[poolId],
-            poolSwapCount[poolId],
-            poolLiquidityVolume[poolId],
-            totalLiquidity[poolId],
-            protocolFeesCollected[poolId]
+        emit LiquidityModified(
+            poolId,
+            msg.sender,
+            params.tickLower,
+            params.tickUpper,
+            params.liquidityDelta
         );
     }
 
-    /// @notice Get pool key by ID
+    /// @notice Public wrapper for modifyLiquidity
+    /// @param key Pool key
+    /// @param params Modify liquidity parameters
+    /// @param hookData Hook data
+    /// @return delta Balance delta
+    /// @return feesAccrued Fees accrued
+    function modifyLiquidity(PoolKey memory key, IPoolManager.ModifyLiquidityParams memory params, bytes calldata hookData)
+        external
+        onlyAuthorized
+        onlyActivePool(key.toId())
+        returns (BalanceDelta delta, BalanceDelta feesAccrued)
+    {
+        return super.modifyLiquidity(key, params, hookData);
+    }
+
+    /// @notice Public wrapper for swap
+    /// @param key Pool key
+    /// @param params Swap parameters
+    /// @param hookData Hook data
+    /// @return delta Balance delta
+    function swap(PoolKey memory key, IPoolManager.SwapParams memory params, bytes calldata hookData)
+        external
+        onlyAuthorized
+        onlyActivePool(key.toId())
+        returns (BalanceDelta delta)
+    {
+        return super.swap(key, params, hookData);
+    }
+
+    /// @notice Public wrapper for settle
+    /// @param currency Currency to settle
+    /// @return paid Amount paid
+    function settle(address currency) external payable returns (uint256 paid) {
+        return super.settle(Currency.wrap(currency));
+    }
+
+    /// @notice Public wrapper for take
+    /// @param currency Currency to take
+    /// @param to Recipient address
+    /// @param amount Amount to take
+    function take(address currency, address to, uint256 amount) external {
+        super.take(Currency.wrap(currency), to, amount);
+    }
+
+    /// @notice Public wrapper for sync
+    /// @param currency Currency to sync
+    function sync(address currency) external {
+        super.sync(Currency.wrap(currency));
+    }
+
+    /// @notice Deactivate pool
     /// @param poolId Pool ID
-    /// @return key Pool key
-    function getPoolKey(PoolId poolId) external view returns (PoolKey memory key) {
-        return poolKeys[poolId];
-    }
-
-    /// @notice Get token fee collection statistics
-    /// @param token Token address
-    /// @return feesCollected Total fees collected for this token
-    function getTokenFeeStats(address token) external view returns (uint256 feesCollected) {
-        return tokenFeesCollected[token];
-    }
-
-    /// @notice Calculate pool TVL (Total Value Locked) - simplified
-    /// @param poolId Pool ID
-    /// @return tvl0 TVL in token0
-    /// @return tvl1 TVL in token1
-    function calculatePoolTVL(PoolId poolId) external view returns (uint256 tvl0, uint256 tvl1) {
-        // This is a simplified calculation
-        // In practice, you'd query the actual pool reserves and calculate based on current price
-        uint128 liquidity = totalLiquidity[poolId];
-
-        // Simplified TVL calculation (would need actual price oracle in production)
-        tvl0 = uint256(liquidity) / 2;
-        tvl1 = uint256(liquidity) / 2;
-    }
-
-    /// @notice Get pool price information - simplified
-    /// @param poolId Pool ID
-    /// @return sqrtPriceX96 Current sqrt price
-    /// @return tick Current tick
-    function getPoolPrice(PoolId poolId) external view returns (uint160 sqrtPriceX96, int24 tick) {
-        // This would query the actual pool state in a real implementation
-        // For now, return simplified values
-        sqrtPriceX96 = TickMath.getSqrtPriceAtTick(0);
-        tick = 0;
-    }
-
-    /// @notice Emergency function to deactivate a pool
-    /// @param poolId Pool ID to deactivate
     function deactivatePool(PoolId poolId) external onlyAdmin {
         activePools[poolId] = false;
     }
 
-    /// @notice Emergency function to reactivate a pool
-    /// @param poolId Pool ID to reactivate
+    /// @notice Reactivate pool
+    /// @param poolId Pool ID
     function reactivatePool(PoolId poolId) external onlyAdmin {
-        require(Currency.unwrap(poolKeys[poolId].currency0) != address(0), "Unistock: Pool not found");
         activePools[poolId] = true;
     }
 
-    /// @notice Emergency function to update pool statistics (admin only)
+    /// @notice Collect protocol fees
     /// @param poolId Pool ID
-    /// @param newVolume New volume value
+    /// @param amount0 Amount of token0 to collect
+    /// @param amount1 Amount of token1 to collect
+    function collectProtocolFees(PoolId poolId, uint256 amount0, uint256 amount1) external onlyAdmin {
+        protocolFeesCollected[poolId] += amount0 + amount1;
+    }
+
+    /// @notice Get token fee statistics
+    /// @param token Token address
+    /// @return amount Amount of fees collected
+    function getTokenFeeStats(address token) external view returns (uint256 amount) {
+        return tokenFeesCollected[token];
+    }
+
+    /// @notice Get pool price
+    /// @param poolId Pool ID
+    /// @return sqrtPrice Current sqrt price
+    /// @return tick Current tick
+    function getPoolPrice(PoolId poolId) external view returns (uint160 sqrtPrice, int24 tick) {
+        // This is a simplified implementation
+        // In practice, you'd get the actual price from the pool
+        sqrtPrice = 79228162514264337593543950336; // 1:1 price
+        tick = 0;
+    }
+
+    /// @notice Update pool statistics
+    /// @param poolId Pool ID
+    /// @param newVolume New volume
     /// @param newSwapCount New swap count
     function updatePoolStats(PoolId poolId, uint256 newVolume, uint256 newSwapCount) external onlyAdmin {
         poolVolume[poolId] = newVolume;
